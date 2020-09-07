@@ -165,6 +165,9 @@ Apply only in `helm-mode' handled commands."
 When nil no sorting is done.
 The function is a `filtered-candidate-transformer' function which takes
 two args CANDIDATES and SOURCE.
+The function must use the flag `helm-completion--sorting-done' and
+return CANDIDATES unchanged when the flag is nil.
+See default function `helm-completion-in-region-sort-fn' as example.
 It will be used only when `helm-completion-style' is either Emacs or
 helm, otherwise when helm-fuzzy style is used, the fuzzy sort function
 will be used."
@@ -510,7 +513,10 @@ If COLLECTION is an `obarray', a TEST should be needed. See `obarray'."
                                 ;; Don't convert
                                 ;; nil to "nil" (i.e the string)
                                 ;; it will be delq'ed on top.
-                                collect (if (null d) d (helm-stringify d)))
+                                for str = (if (null d) d (helm-stringify d))
+                                when (member str cands)
+                                do (setq cands (delete d cands))
+                                when str collect str)
                        cands))
               (t cands))))
 
@@ -1045,12 +1051,25 @@ This handler uses dynamic matching which allows honouring `completion-styles'."
            init hist default inherit-input-method
            name buffer standard)))
 
+(defun helm-mode--read-buffer-to-switch (prompt)
+  "[INTERNAL] This is used to advice `read-buffer-to-switch'.
+Don't use it directly."
+  ;; `read-buffer-to-switch' is passing `minibuffer-completion-table'
+  ;; to `read-buffer' through `minibuffer-setup-hook' which is too
+  ;; late to be known by `read-buffer-function', in our case
+  ;; `helm--generic-read-buffer'.  It should let bind it to allow us
+  ;; using it. 
+  (let ((minibuffer-completion-table (internal-complete-buffer-except)))
+    (read-buffer prompt (other-buffer (current-buffer))
+                 (confirm-nonexistent-file-or-buffer))))
+
 (defun helm--generic-read-buffer (prompt &optional default require-match predicate)
   "The `read-buffer-function' for `helm-mode'.
-Affects `switch-to-buffer' and related."
-  (let ((collection (helm-buffer-list)))
-    (helm--completing-read-default
-     prompt collection predicate require-match nil nil default)))
+Affects `switch-to-buffer' `kill-buffer' and related."
+  (helm--completing-read-default
+   prompt (or minibuffer-completion-table
+              (internal-complete-buffer "" nil t))
+   predicate require-match nil nil default))
 
 (cl-defun helm--completing-read-default
     (prompt collection &optional
@@ -2008,7 +2027,8 @@ Note: This mode is incompatible with Emacs23."
           ;; `ffap-read-file-or-url-internal' have been removed in
           ;; emacs-27 and `ffap-read-file-or-url' is fixed, so no need
           ;; to advice it.
-          (advice-add 'ffap-read-file-or-url :override #'helm-advice--ffap-read-file-or-url)))
+          (advice-add 'ffap-read-file-or-url :override #'helm-advice--ffap-read-file-or-url))
+        (advice-add 'read-buffer-to-switch :override #'helm-mode--read-buffer-to-switch))
     (progn
       (remove-function completing-read-function #'helm--completing-read-default)
       (remove-function read-file-name-function #'helm--generic-read-file-name)
@@ -2016,7 +2036,8 @@ Note: This mode is incompatible with Emacs23."
       (remove-function completion-in-region-function #'helm--completion-in-region)
       (remove-hook 'ido-everywhere-hook #'helm-mode--ido-everywhere-hook)
       (when (fboundp 'ffap-read-file-or-url-internal)
-        (advice-remove 'ffap-read-file-or-url #'helm-advice--ffap-read-file-or-url)))))
+        (advice-remove 'ffap-read-file-or-url #'helm-advice--ffap-read-file-or-url))
+      (advice-remove 'read-buffer-to-switch #'helm-mode--read-buffer-to-switch))))
 
 (provide 'helm-mode)
 
